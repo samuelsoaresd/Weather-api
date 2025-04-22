@@ -1,128 +1,104 @@
 import streamlit as st
 import requests
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 
-# URL base da API (ajuste conforme necessário)
 API_URL = "http://localhost:8000"
-
-st.set_page_config(
-    page_title="Previsão do Tempo",
-    page_icon="🌤️",
-    layout="wide"
-)
 
 st.title("🌤️ Previsão do Tempo")
 
-def format_date(date_str):
-    date_obj = datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S.%f")
-    return date_obj.strftime("%d/%m/%Y %H:%M")
+col1, col2 = st.columns(2)
 
-with st.sidebar:
-    st.header("Consultar Previsão")
-    
-    with st.form("nova_previsao"):
-        cidade_input = st.text_input("Nome da Cidade", value="São Paulo")
-        submit_button = st.form_submit_button("Buscar Previsão")
-        
-        if submit_button:
+with col1:
+    st.subheader("Consultar Nova Previsão")
+    cidade = st.text_input("Nome da cidade")
+    if st.button("Buscar Previsão"):
+        if cidade:
             try:
-                response = requests.post(
-                    f"{API_URL}/previsao/",
-                    json={"cidade": cidade_input}
-                )
-                
+                response = requests.post(f"{API_URL}/previsao/", json={"cidade": cidade})
                 if response.status_code == 200:
-                    st.success(f"Previsão para {cidade_input} registrada com sucesso!")
+                    st.success(f"Previsão para {cidade} registrada com sucesso!")
                 else:
-                    st.error(f"Erro: {response.json().get('detail', 'Erro desconhecido')}")
+                    st.error("Erro ao buscar previsão")
             except Exception as e:
-                st.error(f"Erro ao comunicar com a API: {str(e)}")
-    
-    st.header("Filtrar Previsões")
-    
-    with st.form("filtrar_previsoes"):
-        filter_cidade = st.text_input("Cidade", "")
-        
-        today = datetime.now()
-        last_week = today - timedelta(days=7)
-        filter_data = st.date_input(
-            "Data",
-            value=None,
-            min_value=last_week,
-            max_value=today
-        )
-        
-        filter_button = st.form_submit_button("Filtrar")
+                st.error(f"Erro: {str(e)}")
+        else:
+            st.warning("Digite o nome da cidade")
 
-st.header("Previsões Registradas")
+with col2:
+    st.subheader("Gerenciar Previsões")
+    opcao = st.selectbox(
+        "O que deseja fazer?",
+        ["Ver todas as previsões", "Filtrar por cidade", "Limpar histórico"]
+    )
+    
+    if opcao == "Filtrar por cidade":
+        cidade_filtro = st.text_input("Digite a cidade para filtrar")
+        if st.button("Filtrar"):
+            if cidade_filtro:
+                params = {"cidade": cidade_filtro}
+            else:
+                params = {}
+        else:
+            params = {}
+    elif opcao == "Limpar histórico":
+        cidade_limpar = st.text_input("Digite a cidade para limpar o histórico (deixe em branco para ver todas)")
+        if st.button("Limpar Histórico", type="primary"):
+            try:
+                if cidade_limpar:
+                    response = requests.delete(f"{API_URL}/previsao/cidade/{cidade_limpar}")
+                else:
+                    response = requests.delete(f"{API_URL}/limpar-tudo?confirmar=true")
+                
+                if response.status_code in [200, 204]:
+                    data = response.json()
+                    st.success(f"{data.get('registros_excluidos', 0)} registros excluídos com sucesso!")
+                else:
+                    st.error("Erro ao limpar histórico")
+            except Exception as e:
+                st.error(f"Erro: {str(e)}")
+        params = {}
+    else:
+        params = {}
 
-params = {}
-if 'filter_button' in locals() and filter_button:
-    if filter_cidade:
-        params['cidade'] = filter_cidade
-    if filter_data:
-        params['data'] = filter_data.strftime("%Y-%m-%d")
+st.subheader("Previsões Disponíveis")
 
 try:
     response = requests.get(f"{API_URL}/previsao/", params=params)
-    
     if response.status_code == 200:
         data = response.json()
-        
         if not data:
             st.info("Nenhum registro encontrado.")
         else:
             df = pd.DataFrame(data)
             
-            renamed_columns = {
-                'cidade': 'Cidade',
-                'temperatura': 'Temperatura (°C)',
-                'sensacao_termica': 'Sensação Térmica (°C)',
-                'umidade': 'Umidade (%)',
-                'descricao': 'Descrição',
-                'velocidade_vento': 'Vel. Vento (m/s)',
-                'data_consulta': 'Data da Consulta'
-            }
+            df['data_consulta'] = pd.to_datetime(df['data_consulta']).dt.strftime('%d/%m/%Y %H:%M')
             
-            df_display = df[renamed_columns.keys()].rename(columns=renamed_columns)
+            for i, row in df.iterrows():
+                with st.container():
+                    col1, col2, col3 = st.columns([3, 2, 1])
+                    with col1:
+                        st.write(f"**{row['cidade']}**: {row['temperatura']}°C - {row['descricao']}")
+                    with col2:
+                        st.write(f"Data: {row['data_consulta']}")
+                    with col3:
+                        if st.button(f"🗑️ Excluir", key=f"del_{row['id']}"):
+                            try:
+                                response = requests.delete(f"{API_URL}/previsao/{row['id']}")
+                                if response.status_code == 204:
+                                    st.success("Registro excluído com sucesso!")
+                                    st.rerun()
+                                else:
+                                    st.error("Erro ao excluir registro")
+                            except Exception as e:
+                                st.error(f"Erro: {str(e)}")
+                    st.divider()
             
-            df_display['Data da Consulta'] = df_display['Data da Consulta'].apply(
-                lambda x: format_date(x)
-            )
+            st.subheader("Comparação de Temperaturas por Cidade")
             
-            st.dataframe(
-                df_display,
-                use_container_width=True,
-                hide_index=True
-            )
+            cidades_unicas = df['cidade'].unique()
             
-            with st.expander("Gerenciar Registros"):
-                col1, col2 = st.columns([3, 1])
-                
-                with col1:
-                    registro_id = st.number_input(
-                        "ID do Registro para Excluir", 
-                        min_value=1, 
-                        step=1
-                    )
-                
-                with col2:
-                    if st.button("Excluir Registro"):
-                        try:
-                            delete_response = requests.delete(f"{API_URL}/previsao/{registro_id}")
-                            
-                            if delete_response.status_code == 204:
-                                st.success(f"Registro {registro_id} excluído com sucesso!")
-                                st.rerun()
-                            else:
-                                st.error("Registro não encontrado ou erro ao excluir.")
-                        except Exception as e:
-                            st.error(f"Erro ao comunicar com a API: {str(e)}")
-                            
-            if len(df) > 1:
-                st.subheader("Comparação de Temperaturas")
-                
+            if len(cidades_unicas) > 1:
                 temp_by_city = df.groupby('cidade')['temperatura'].mean().reset_index()
                 
                 st.bar_chart(
@@ -131,10 +107,29 @@ try:
                     y='temperatura',
                     use_container_width=True
                 )
-                
+            else:
+                if len(df) > 1:
+                    st.write(f"Evolução da temperatura em {cidades_unicas[0]}")
+                    
+                    df['data_ordenacao'] = pd.to_datetime(df['data_consulta'], format='%d/%m/%Y %H:%M')
+                    df = df.sort_values('data_ordenacao')
+                    
+                    chart_data = pd.DataFrame({
+                        'data': df['data_consulta'],
+                        'temperatura': df['temperatura']
+                    })
+                    
+                    st.line_chart(
+                        chart_data,
+                        x='data',
+                        y='temperatura',
+                        use_container_width=True
+                    )
+                else:
+                    st.info("Adicione mais registros para visualizar gráficos comparativos.")
+            
 except Exception as e:
     st.error(f"Erro ao comunicar com a API: {str(e)}")
-    st.error("Verifique se o servidor da API está em execução.")
 
 # Rodapé
 st.divider()
